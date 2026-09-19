@@ -6,7 +6,18 @@ When your queue is about to run out, autoplay asks [Last.fm](https://www.last.fm
 
 ## Why Last.fm
 
-Spotify removed its recommendations and related-artists APIs for apps registered after November 2024, so a cliamp setup with its own Spotify client ID can't ask Spotify what's similar. Last.fm's similarity data is free, needs only an API key, and covers regional music well.
+Spotify removed its recommendations and related-artists APIs for apps registered after November 2024, so a cliamp setup with its own Spotify client ID can't ask Spotify what's similar. Last.fm's similarity data is free, needs only an API key, and covers music from everywhere.
+
+## Example
+
+What one top-up queues for a few different songs:
+
+| Playing | Autoplay queues |
+|---|---|
+| Daft Punk – Get Lucky | Avicii – Wake Me Up · Breakbot – Baby I'm Yours · David Guetta – Titanium |
+| Bad Bunny – Tití Me Preguntó | Daddy Yankee – Gasolina · KAROL G – LATINA FOREVA · Rauw Alejandro – Qué Pasaría... |
+| Radiohead – Karma Police | Pixies – Where Is My Mind? · Foo Fighters – Everlong · The Smashing Pumpkins – 1979 |
+| Burna Boy – Last Last | Fireboy DML – Peru · 1da Banton – No Wahala · Wizkid – Joro |
 
 ## Install
 
