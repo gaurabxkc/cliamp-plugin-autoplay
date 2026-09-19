@@ -31,7 +31,7 @@
 local p = plugin.register({
     name        = "autoplay",
     type        = "hook",
-    version     = "1.2.0",
+    version     = "1.3.0",
     description = "Endless similar-track playback via Last.fm, streamed from Spotify",
     permissions = { "keymap", "exec" },
 })
@@ -167,9 +167,10 @@ local function similar(artist, title, limit)
         .. "&limit="  .. tostring(limit)
         .. "&api_key=" .. urlencode(API_KEY)
 
-    -- The second result says whether Last.fm answered "not found" (error 6),
-    -- which is the only case where retrying with a shorter artist name helps.
-    -- A failed request says nothing about the name.
+    -- The second result says whether Last.fm actually answered, found or not.
+    -- Only then is retrying with a shorter artist name meaningful: a failed
+    -- request says nothing about the name, and shortening after one is how
+    -- "Earth, Wind & Fire" became the unrelated band "Earth".
     local body, status = cliamp.http.get(url)
     if status ~= 200 or not body then
         cliamp.log.warn("autoplay: last.fm HTTP " .. tostring(status))
@@ -182,7 +183,7 @@ local function similar(artist, title, limit)
         return {}, tonumber(d.error) == 6
     end
     local list = d.similartracks and d.similartracks.track
-    if not list then return {}, false end
+    if not list then return {}, true end
     if list.name then list = { list } end
 
     local out = {}
@@ -190,7 +191,7 @@ local function similar(artist, title, limit)
         local a = t.artist and t.artist.name
         if a and t.name then out[#out + 1] = { artist = a, title = t.name } end
     end
-    return out
+    return out, true
 end
 
 -- Regional and long-tail tracks often have no track.getSimilar data at all
@@ -403,12 +404,14 @@ local function top_up_body(artist, title)
     artist = tostring(artist):gsub("^%s+", ""):gsub("%s+$", "")
     local short = first_artist(artist)
     cliamp.log.info("autoplay: seeding from " .. artist .. " — " .. title)
+    -- The seed is playing now; never suggest it back.
+    mark_seen(artist, title)
 
     -- Over-fetch: many suggestions won't resolve on Spotify or were played.
     -- Full artist name first; the cut-down name only if Last.fm had nothing.
     local want = want_now()
-    local cands, unknown = similar(artist, title, want * 3)
-    if #cands == 0 and unknown and short ~= artist then
+    local cands, answered = similar(artist, title, want * 3)
+    if #cands == 0 and answered and short ~= artist then
         cands = similar(short, title, want * 3)
     end
     cliamp.log.info("autoplay: last.fm returned " .. #cands .. " candidates")
@@ -417,16 +420,25 @@ local function top_up_body(artist, title)
     -- seed whose whole candidate list was queued earlier is as useless as an
     -- empty one, and the artist path returns a different, wider pool — so
     -- fall through to it in both cases rather than adding nothing.
-    local fresh = 0
-    for _, c in ipairs(cands) do
-        if not is_seen(c.artist, c.title) then fresh = fresh + 1 end
+    local function fresh_count(list)
+        local n = 0
+        for _, c in ipairs(list) do
+            if not is_seen(c.artist, c.title) then n = n + 1 end
+        end
+        return n
     end
-    if fresh == 0 then
+    if fresh_count(cands) == 0 then
         cliamp.log.info("autoplay: no fresh track similarity (" .. #cands
             .. " candidates, all recent); falling back to similar artists")
         cands = similar_by_artist(artist, want * 2)
-        if #cands == 0 and unknown and short ~= artist then
-            cands = similar_by_artist(short, want * 2)
+        -- A multi-artist credit ("A, B, C") can be half-recognised: Last.fm
+        -- autocorrects it to one or two tracks and no similar artists. When
+        -- that leaves too few new songs (and Last.fm really answered, rather
+        -- than the request failing), add the first credited artist's pool.
+        if fresh_count(cands) < want and answered and short ~= artist then
+            for _, c in ipairs(similar_by_artist(short, want * 2)) do
+                cands[#cands + 1] = c
+            end
         end
         cliamp.log.info("autoplay: artist fallback returned " .. #cands .. " candidates")
     end
