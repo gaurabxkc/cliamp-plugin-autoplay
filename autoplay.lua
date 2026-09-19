@@ -31,7 +31,7 @@
 local p = plugin.register({
     name        = "autoplay",
     type        = "hook",
-    version     = "1.1.0",
+    version     = "1.2.0",
     description = "Endless similar-track playback via Last.fm, streamed from Spotify",
     permissions = { "keymap", "exec" },
 })
@@ -80,8 +80,11 @@ local function urlencode(s)
     end))
 end
 
--- Last.fm matches a single artist; cliamp reports joined credits such as
--- "Calvin Harris, Dua Lipa", which match nothing. Use the first name only.
+-- cliamp reports joined credits such as "Calvin Harris, Dua Lipa". Last.fm
+-- sometimes needs just the first name for those. It is only a fallback: many
+-- real artist names contain a comma or "&" ("Earth, Wind & Fire", "Tyler, The
+-- Creator", "Simon & Garfunkel"), and cutting those finds a different artist
+-- or nothing. Callers try the full name first.
 local function first_artist(a)
     a = tostring(a or "")
     local head = a:match("^(.-)%s*[,;&]") or a:match("^(.-)%s+feat%.") or a
@@ -164,19 +167,22 @@ local function similar(artist, title, limit)
         .. "&limit="  .. tostring(limit)
         .. "&api_key=" .. urlencode(API_KEY)
 
+    -- The second result says whether Last.fm answered "not found" (error 6),
+    -- which is the only case where retrying with a shorter artist name helps.
+    -- A failed request says nothing about the name.
     local body, status = cliamp.http.get(url)
     if status ~= 200 or not body then
         cliamp.log.warn("autoplay: last.fm HTTP " .. tostring(status))
-        return {}
+        return {}, false
     end
     local ok, d = pcall(cliamp.json.decode, body)
-    if not ok or not d then return {} end
+    if not ok or not d then return {}, false end
     if d.error then
         cliamp.log.warn("autoplay: last.fm error " .. tostring(d.error) .. " " .. tostring(d.message))
-        return {}
+        return {}, tonumber(d.error) == 6
     end
     local list = d.similartracks and d.similartracks.track
-    if not list then return {} end
+    if not list then return {}, false end
     if list.name then list = { list } end
 
     local out = {}
@@ -363,7 +369,9 @@ local function queue_candidates(cands, want)
         if is_seen(c.artist, c.title) then return step() end
         mark_seen(c.artist, c.title)
 
-        local query = 'artist:"' .. c.artist .. '" track:"' .. c.title .. '"'
+        -- Double quotes would end the field filter early, so drop them.
+        local function field(v) return (tostring(v):gsub('"', "")) end
+        local query = 'artist:"' .. field(c.artist) .. '" track:"' .. field(c.title) .. '"'
         run_cli("provider.search", { provider = "spotify", query = query, limit = 1 }, function(ok, r)
             local t = ok and r and r.tracks and r.tracks[1]
             if not t or not t.path then return step() end
@@ -392,12 +400,17 @@ end
 -- hookTimeout, so one bad run can't wedge autoplay off for the rest of the
 -- session (busy stuck true forever, silently no-oping every future call).
 local function top_up_body(artist, title)
-    artist = first_artist(artist)
+    artist = tostring(artist):gsub("^%s+", ""):gsub("%s+$", "")
+    local short = first_artist(artist)
     cliamp.log.info("autoplay: seeding from " .. artist .. " — " .. title)
 
     -- Over-fetch: many suggestions won't resolve on Spotify or were played.
+    -- Full artist name first; the cut-down name only if Last.fm had nothing.
     local want = want_now()
-    local cands = similar(artist, title, want * 3)
+    local cands, unknown = similar(artist, title, want * 3)
+    if #cands == 0 and unknown and short ~= artist then
+        cands = similar(short, title, want * 3)
+    end
     cliamp.log.info("autoplay: last.fm returned " .. #cands .. " candidates")
 
     -- Count how many are actually usable, not just how many came back. A
@@ -412,6 +425,9 @@ local function top_up_body(artist, title)
         cliamp.log.info("autoplay: no fresh track similarity (" .. #cands
             .. " candidates, all recent); falling back to similar artists")
         cands = similar_by_artist(artist, want * 2)
+        if #cands == 0 and unknown and short ~= artist then
+            cands = similar_by_artist(short, want * 2)
+        end
         cliamp.log.info("autoplay: artist fallback returned " .. #cands .. " candidates")
     end
     if #cands == 0 then
