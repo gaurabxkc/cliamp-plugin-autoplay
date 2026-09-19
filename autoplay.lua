@@ -31,7 +31,7 @@
 local p = plugin.register({
     name        = "autoplay",
     type        = "hook",
-    version     = "1.0.0",
+    version     = "1.1.0",
     description = "Endless similar-track playback via Last.fm, streamed from Spotify",
     permissions = { "keymap", "exec" },
 })
@@ -325,9 +325,21 @@ end
 -- queue_candidates works through the ranked candidates one at a time: find
 -- each on Spotify, queue the first match, and stop after ADD tracks. One
 -- subprocess at a time keeps well under the host's per-plugin cap.
-local function queue_candidates(cands)
+-- remaining is defined with the other queue helpers below; declared here so
+-- the top-up can size itself.
+local remaining
+
+-- want is how many tracks this round should add: enough to bring the queue
+-- back up to KEEP in one go, and never fewer than ADD. Topping up by a fixed
+-- ADD needed two back-to-back rounds (and overshot) on an empty queue.
+local function want_now()
+    local rem = remaining and remaining() or 0
+    return math.max(ADD, KEEP - rem)
+end
+
+local function queue_candidates(cands, want)
     local added, i = 0, 0
-    pending = ADD
+    pending = want
 
     local function finish()
         pending = 0
@@ -344,7 +356,7 @@ local function queue_candidates(cands)
 
     local step
     step = function()
-        if added >= ADD then return finish() end
+        if added >= want then return finish() end
         i = i + 1
         local c = cands[i]
         if not c then return finish() end
@@ -362,7 +374,7 @@ local function queue_candidates(cands)
                     local id = tostring(t.path):match("^spotify:track:(%w+)$")
                     if id then remember(id, t.artist or c.artist, t.title or c.title) end
                     added = added + 1
-                    pending = math.max(0, ADD - added)
+                    pending = math.max(0, want - added)
                 else
                     unmark_seen(c.artist, c.title)
                 end
@@ -384,7 +396,8 @@ local function top_up_body(artist, title)
     cliamp.log.info("autoplay: seeding from " .. artist .. " — " .. title)
 
     -- Over-fetch: many suggestions won't resolve on Spotify or were played.
-    local cands = similar(artist, title, ADD * 3)
+    local want = want_now()
+    local cands = similar(artist, title, want * 3)
     cliamp.log.info("autoplay: last.fm returned " .. #cands .. " candidates")
 
     -- Count how many are actually usable, not just how many came back. A
@@ -398,7 +411,7 @@ local function top_up_body(artist, title)
     if fresh == 0 then
         cliamp.log.info("autoplay: no fresh track similarity (" .. #cands
             .. " candidates, all recent); falling back to similar artists")
-        cands = similar_by_artist(artist, ADD * 2)
+        cands = similar_by_artist(artist, want * 2)
         cliamp.log.info("autoplay: artist fallback returned " .. #cands .. " candidates")
     end
     if #cands == 0 then
@@ -414,7 +427,7 @@ local function top_up_body(artist, title)
     -- queue.change, which would re-run this and queue the same handful again.
     -- Adding nothing is right when there is nothing new; the next track
     -- change brings a fresh seed.
-    queue_candidates(cands)
+    queue_candidates(cands, want)
     return true
 end
 
@@ -459,7 +472,7 @@ local function seed_from(t)
     return nil, nil
 end
 
-local function remaining()
+remaining = function()
     local count = cliamp.queue.count() or 0
     local cur   = cliamp.queue.current() or 0
     return count - cur - 1

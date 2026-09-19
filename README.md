@@ -39,7 +39,7 @@ Restart cliamp and play a song from Spotify.
 
 ## Use
 
-- It works on its own: when fewer than 5 songs are left, it queues 3 similar ones.
+- It works on its own: when fewer than 5 songs are left, it fills the queue back up in one go (at least 3 songs at a time).
 - **Ctrl+T** turns it on or off.
 - To try it right away: `cliamp plugins call autoplay test "Artist" "Title"`
 
@@ -50,7 +50,7 @@ All optional, under `[plugins.autoplay]`:
 | Key | Default | What it does |
 |---|---|---|
 | `keep` | `5` | Top up when fewer than this many songs are left |
-| `add` | `3` | How many songs to queue each time |
+| `add` | `3` | The minimum number of songs to queue each time |
 | `enabled` | `true` | Start with autoplay on |
 | `binary` | `cliamp` | Full path to cliamp, if it isn't on the player's `$PATH` |
 
