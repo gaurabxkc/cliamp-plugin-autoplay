@@ -81,7 +81,7 @@ local function urlencode(s)
 end
 
 -- Last.fm matches a single artist; cliamp reports joined credits such as
--- "Farhan Khan, Mr. Doss", which match nothing. Use the first name only.
+-- "Calvin Harris, Dua Lipa", which match nothing. Use the first name only.
 local function first_artist(a)
     a = tostring(a or "")
     local head = a:match("^(.-)%s*[,;&]") or a:match("^(.-)%s+feat%.") or a
@@ -188,7 +188,7 @@ local function similar(artist, title, limit)
 end
 
 -- Regional and long-tail tracks often have no track.getSimilar data at all
--- (your "Farhan Khan, Mr. Doss — Resham" returned 0). Fall back to similar
+-- (track.getSimilar often returns nothing for them). Fall back to similar
 -- artists, then take each one's top tracks.
 local function similar_by_artist(artist, limit)
     local function call(method, extra)
@@ -233,15 +233,11 @@ end
 
 -- ── ranking ──────────────────────────────────────────────────────────────
 
--- THE FIX. Both similar() and similar_by_artist() return a flat list, but
+-- Both similar() and similar_by_artist() return a flat list, but
 -- similar_by_artist's is built depth-first: up to 4 tracks from similar
--- artist #1, then artist #2, and so on. top_up_body below just walks the
--- list in order and stops at ADD (3) — so every top-up came entirely from
--- artist #1. Measured against the live key: seeding from Albatross queued
--- Shree 3 x3, from Vek queued Oasis Thapa x3, from Farhan Khan queued LASH
--- CURRY x3. Last.fm's data was never the problem — artist.getSimilar
--- returned 10 correct artists for every one of those seeds. The ranking
--- just never reached past the first name in the list.
+-- artist #1, then artist #2, and so on. Walking it in order and stopping at
+-- ADD would take every top-up from artist #1, even though artist.getSimilar
+-- returns plenty of other good artists.
 --
 -- diversify() regroups a flat candidate list by artist (order preserved
 -- within each group) and interleaves — one track per artist per pass — so
@@ -256,7 +252,7 @@ end
 -- This is deliberately NOT "never repeat an artist" — a repeat within a
 -- batch is a normal radio pick and forcing zero repeats would throw away
 -- good candidates on a seed with few distinct similar artists. The bug
--- being fixed is specifically the whole batch coming from one artist when
+-- avoided is specifically the whole batch coming from one artist when
 -- other artists were available and simply never reached.
 local function diversify(cands, seed_artist)
     local seed = tostring(seed_artist or ""):lower()
