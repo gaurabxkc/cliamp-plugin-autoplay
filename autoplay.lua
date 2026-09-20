@@ -31,7 +31,7 @@
 local p = plugin.register({
     name        = "autoplay",
     type        = "hook",
-    version     = "1.3.0",
+    version     = "1.4.0",
     description = "Endless similar-track playback via Last.fm, streamed from Spotify",
     permissions = { "keymap", "exec" },
 })
@@ -510,17 +510,41 @@ end
 -- they had already landed: they take ~10s to appear while queue.change
 -- re-runs this within a second, and ignoring them is what let the plugin
 -- fire seven rounds of duplicates before the first one arrived.
+-- retry_timer re-checks once a wait expires. Without it, a queue that ran low
+-- during a backoff or cooldown stayed low until the next track change: editing
+-- a playlist down to a couple of tracks inside that window looked like autoplay
+-- had simply stopped.
+-- schedule is defined below, with the event wiring.
+local schedule
+local retry_timer = nil
+
+local function retry_after(seconds, artist, title)
+    if retry_timer then cliamp.timer.cancel(retry_timer) end
+    retry_timer = cliamp.timer.after(seconds + 1, function()
+        retry_timer = nil
+        schedule(artist, title)
+    end)
+end
+
 local function needs_topup()
     local rem, now = remaining(), os.time()
-    local why
+    local why, wait
     if pending > 0 and (rem + pending) >= KEEP then
         why = "enough in flight"
     elseif now < idle_until then
-        why = "idle backoff " .. (idle_until - now) .. "s left"
+        wait = idle_until - now
+        why = "idle backoff " .. wait .. "s left"
     elseif now - last_round < COOLDOWN then
-        why = "cooldown " .. (COOLDOWN - (now - last_round)) .. "s left"
+        wait = COOLDOWN - (now - last_round)
+        why = "cooldown " .. wait .. "s left"
     elseif (rem + pending) >= KEEP then
         why = "queue deep enough"
+    end
+    -- A wait is the only skip worth revisiting: the others change on their own
+    -- when tracks land or the queue drains.
+    if wait and (rem + pending) < KEEP then
+        local a, t = seed_from(nil)
+        if a then retry_after(wait, a, t) end
     end
     if why then
         cliamp.log.info("autoplay: skip top-up (" .. why .. "; remaining=" .. rem
@@ -536,7 +560,7 @@ end
 -- luaplugin/hooks.go). A top-up is a Last.fm call plus up to ADD Spotify
 -- lookups and queue calls, which is far more than that. Timer callbacks
 -- have no deadline, so every hook below only schedules and returns at once.
-local function schedule(artist, title)
+schedule = function(artist, title)
     if not enabled or os.time() < busy_until or API_KEY == "" then return end
     if not artist or artist == "" then return end
     -- On a player that reports radio sessions (cliamp.player.radio), only top
@@ -596,6 +620,31 @@ end)
 -- Manual trigger, for debugging without waiting for the queue to run low:
 --   cliamp plugins call autoplay test ["Artist" "Title"]
 -- Commands need no permission and get a 5-minute budget, unlike the 5s hooks.
+-- status answers "why is nothing being queued?" without reading the log.
+p:command("status", function()
+    local now = os.time()
+    local lines = {
+        "autoplay " .. (enabled and "on" or "off (Ctrl+T)"),
+        "last.fm key: " .. (API_KEY ~= "" and "set" or "MISSING — set api_key in [plugins.autoplay]"),
+        "cliamp binary: " .. BINARY .. " (must be in allowed_binaries under [plugins])",
+        string.format("queue: %d ahead, %d in flight, tops up below %d, adds %d at a time",
+            remaining(), pending, KEEP, ADD),
+    }
+    if now < idle_until then
+        lines[#lines + 1] = string.format("waiting %ds: the last round found nothing new", idle_until - now)
+    elseif now - last_round < COOLDOWN then
+        lines[#lines + 1] = string.format("waiting %ds between rounds", COOLDOWN - (now - last_round))
+    elseif now < busy_until then
+        lines[#lines + 1] = "a round is running now"
+    end
+    local last = store_get("last_seed", nil)
+    if last then
+        local la, lt = tostring(last):match("^(.-)\t(.*)$")
+        lines[#lines + 1] = "last seed: " .. tostring(la) .. " — " .. tostring(lt)
+    end
+    return table.concat(lines, "\n")
+end)
+
 p:command("test", function(args)
     local a = args and args[1]
     local t = args and args[2]

@@ -42,6 +42,7 @@ Restart cliamp and play a song from Spotify.
 - It works on its own: when fewer than 5 songs are left, it fills the queue back up in one go (at least 3 songs at a time).
 - **Ctrl+T** turns it on or off.
 - To try it right away: `cliamp plugins call autoplay test "Artist" "Title"`
+- To see what it is doing: `cliamp plugins call autoplay status`
 
 ## Settings
 
@@ -64,11 +65,12 @@ Searching and queueing both happen inside cliamp with its own Spotify login. The
 
 ## Troubleshooting
 
-Check `plugins.log` in your cliamp config directory.
+Start with `cliamp plugins call autoplay status`: it reports whether autoplay is on, whether the Last.fm key is set, which binary it calls, how many songs are ahead, and any wait it is in. Then check `plugins.log` in your cliamp config directory.
 
 - `cannot run cliamp`: add `cliamp` (or the full path you set in `binary`) to `allowed_binaries`.
 - `last.fm error 10`: the API key is wrong.
 - Nothing is queued for some songs: Last.fm has no similar tracks for them, and autoplay tries again on the next song.
+- Nothing happens right after you edit a playlist: a round that just ran holds a short cooldown, and one that found nothing waits 90s. Autoplay re-checks by itself when the wait ends.
 
 ## License
 
