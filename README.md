@@ -4,6 +4,8 @@ Endless similar-track playback for [cliamp](https://github.com/bjarneo/cliamp), 
 
 When your queue is about to run out, autoplay asks [Last.fm](https://www.last.fm) for songs similar to what's playing, finds them on Spotify, and queues them, so the music keeps going.
 
+![autoplay queueing similar tracks](docs/autoplay.png)
+
 ## Why Last.fm
 
 Spotify removed its recommendations and related-artists APIs for apps registered after November 2024, so a cliamp setup with its own Spotify client ID can't ask Spotify what's similar. Last.fm's similarity data is free, needs only an API key, and covers music from everywhere.
