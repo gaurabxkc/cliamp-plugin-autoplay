@@ -31,7 +31,7 @@
 local p = plugin.register({
     name        = "autoplay",
     type        = "hook",
-    version     = "1.4.0",
+    version     = "1.5.0",
     description = "Endless similar-track playback via Last.fm, streamed from Spotify",
     permissions = { "keymap", "exec" },
 })
@@ -159,6 +159,64 @@ end
 
 -- ── Last.fm ──────────────────────────────────────────────────────────────
 
+-- key_rejected is set when Last.fm refuses the API key. It is not worth
+-- asking again every track: the answer cannot change until the config does,
+-- and a hundred log lines about "0 candidates" hide the real cause.
+local key_rejected = false
+local key_rejected_msg = ""
+
+-- Last.fm error codes worth naming. Everything else is reported by number.
+local LASTFM_INVALID_KEY = 10
+local LASTFM_SUSPENDED = 26
+local LASTFM_NOT_FOUND = 6
+
+-- lastfm_get performs one request and returns the decoded reply, plus whether
+-- Last.fm actually answered (as opposed to the request failing).
+--
+-- The body is read even when the status is not 200: Last.fm reports a
+-- rejected key as HTTP 403 with {"error":10} in the body, and throwing that
+-- away is what made a bad key look like "no similar tracks found" on every
+-- single track.
+local function lastfm_get(url)
+    if key_rejected then return nil, false end
+
+    local body, status = cliamp.http.get(url)
+    if not body then
+        cliamp.log.warn("autoplay: last.fm unreachable (HTTP " .. tostring(status) .. ")")
+        return nil, false
+    end
+
+    local ok, d = pcall(cliamp.json.decode, body)
+    if not ok or not d then
+        cliamp.log.warn("autoplay: last.fm HTTP " .. tostring(status) .. ", unreadable reply")
+        return nil, false
+    end
+
+    if d.error then
+        local code = tonumber(d.error) or 0
+        local msg = tostring(d.message or "")
+        if code == LASTFM_INVALID_KEY or code == LASTFM_SUSPENDED then
+            key_rejected = true
+            key_rejected_msg = msg
+            cliamp.log.error("autoplay: last.fm rejected the API key (" .. msg
+                .. "). Autoplay is idle until api_key in [plugins.autoplay] is fixed;"
+                .. " get a key at https://www.last.fm/api/account/create")
+            cliamp.message("Autoplay: Last.fm rejected the API key — see status", 6)
+            return nil, false
+        end
+        if code ~= LASTFM_NOT_FOUND then
+            cliamp.log.warn("autoplay: last.fm error " .. code .. " " .. msg)
+        end
+        return nil, code == LASTFM_NOT_FOUND
+    end
+
+    if status ~= 200 then
+        cliamp.log.warn("autoplay: last.fm HTTP " .. tostring(status))
+        return nil, false
+    end
+    return d, true
+end
+
 local function similar(artist, title, limit)
     local url = "https://ws.audioscrobbler.com/2.0/"
         .. "?method=track.getsimilar&format=json&autocorrect=1"
@@ -171,17 +229,8 @@ local function similar(artist, title, limit)
     -- Only then is retrying with a shorter artist name meaningful: a failed
     -- request says nothing about the name, and shortening after one is how
     -- "Earth, Wind & Fire" became the unrelated band "Earth".
-    local body, status = cliamp.http.get(url)
-    if status ~= 200 or not body then
-        cliamp.log.warn("autoplay: last.fm HTTP " .. tostring(status))
-        return {}, false
-    end
-    local ok, d = pcall(cliamp.json.decode, body)
-    if not ok or not d then return {}, false end
-    if d.error then
-        cliamp.log.warn("autoplay: last.fm error " .. tostring(d.error) .. " " .. tostring(d.message))
-        return {}, tonumber(d.error) == 6
-    end
+    local d, answered = lastfm_get(url)
+    if not d then return {}, answered end
     local list = d.similartracks and d.similartracks.track
     if not list then return {}, true end
     if list.name then list = { list } end
@@ -202,10 +251,8 @@ local function similar_by_artist(artist, limit)
         local url = "https://ws.audioscrobbler.com/2.0/?method=" .. method
             .. "&format=json&autocorrect=1&artist=" .. urlencode(artist)
             .. (extra or "") .. "&api_key=" .. urlencode(API_KEY)
-        local body, status = cliamp.http.get(url)
-        if status ~= 200 or not body then return nil end
-        local ok, d = pcall(cliamp.json.decode, body)
-        return ok and d or nil
+        local d = lastfm_get(url)
+        return d
     end
 
     local d = call("artist.getsimilar", "&limit=6")
@@ -461,7 +508,7 @@ end
 
 local function top_up(artist, title)
     if not enabled or os.time() < busy_until then return end
-    if API_KEY == "" then return end
+    if API_KEY == "" or key_rejected then return end
     if not artist or artist == "" or not title or title == "" then
         cliamp.log.warn("autoplay: no seed track available; skipping")
         return
@@ -620,12 +667,26 @@ end)
 -- Manual trigger, for debugging without waiting for the queue to run low:
 --   cliamp plugins call autoplay test ["Artist" "Title"]
 -- Commands need no permission and get a 5-minute budget, unlike the 5s hooks.
+-- lastfm_key_state describes the API key as Last.fm sees it, which is the
+-- difference between "nothing similar for this track" and "nothing will ever
+-- work until you fix the key".
+local function lastfm_key_state()
+    if API_KEY == "" then
+        return "MISSING — set api_key in [plugins.autoplay]"
+    end
+    if key_rejected then
+        return "REJECTED by last.fm (" .. key_rejected_msg
+            .. ") — replace api_key in [plugins.autoplay] and restart"
+    end
+    return "set"
+end
+
 -- status answers "why is nothing being queued?" without reading the log.
 p:command("status", function()
     local now = os.time()
     local lines = {
         "autoplay " .. (enabled and "on" or "off (Ctrl+T)"),
-        "last.fm key: " .. (API_KEY ~= "" and "set" or "MISSING — set api_key in [plugins.autoplay]"),
+        "last.fm key: " .. lastfm_key_state(),
         "cliamp binary: " .. BINARY .. " (must be in allowed_binaries under [plugins])",
         string.format("queue: %d ahead, %d in flight, tops up below %d, adds %d at a time",
             remaining(), pending, KEEP, ADD),

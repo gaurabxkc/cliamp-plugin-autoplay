@@ -25,7 +25,14 @@ What one top-up queues for a few different songs:
 cliamp plugins install gaurabxkc/cliamp-plugin-autoplay
 ```
 
-Then add this to `~/.config/cliamp/config.toml`:
+Already have it installed? Remove it first — `plugins install` will not overwrite an existing plugin:
+
+```sh
+cliamp plugins remove autoplay
+cliamp plugins install gaurabxkc/cliamp-plugin-autoplay
+```
+
+Then add this to cliamp's `config.toml`. It lives beside the `plugins` folder cliamp just printed: `~/.config/cliamp/config.toml` on Linux and macOS, `%APPDATA%\cliamp\config.toml` (for example `C:\Users\you\AppData\Roaming\cliamp\config.toml`) on Windows — **not** `C:\Users\you\.config\cliamp`.
 
 ```toml
 [plugins]
@@ -68,7 +75,8 @@ Searching and queueing both happen inside cliamp with its own Spotify login. The
 Start with `cliamp plugins call autoplay status`: it reports whether autoplay is on, whether the Last.fm key is set, which binary it calls, how many songs are ahead, and any wait it is in. Then check `plugins.log` in your cliamp config directory.
 
 - `cannot run cliamp`: add `cliamp` (or the full path you set in `binary`) to `allowed_binaries`.
-- `last.fm error 10`: the API key is wrong.
+- `last.fm rejected the API key`: the key is wrong, or the account is suspended. Autoplay goes idle rather than asking again on every track; `status` shows `REJECTED` with Last.fm's own message. Get a key at https://www.last.fm/api/account/create, replace `api_key`, and restart cliamp.
+- `config.toml` edits seem to do nothing on Windows: check the path. `%APPDATA%\cliamp\config.toml`, not `~/.config/cliamp`. `cliamp plugins call autoplay status` echoes the settings it actually loaded.
 - Nothing is queued for some songs: Last.fm has no similar tracks for them, and autoplay tries again on the next song.
 - Nothing happens right after you edit a playlist: a round that just ran holds a short cooldown, and one that found nothing waits 90s. Autoplay re-checks by itself when the wait ends.
 
