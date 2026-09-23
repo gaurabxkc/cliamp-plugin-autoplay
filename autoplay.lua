@@ -57,6 +57,16 @@ local BUSY_TTL = 180 -- a round queues tracks one by one, ~10s each
 -- again, and again, the runaway that produced 7 rounds of duplicates in 8
 -- seconds. Pending counts as queued for the purposes of deciding to top up.
 local pending = 0
+
+-- current_uri is the Spotify URI of the track playing now, when there is one.
+-- It is what a Spotify radio round seeds from.
+local current_uri = nil
+
+-- radio_skip_until pauses Spotify radio after a failed call. On a host that
+-- does not serve provider.radio at all, asking every round would only log the
+-- same failure over and over; a transient failure recovers after the wait.
+local radio_skip_until = 0
+local RADIO_RETRY = 600
 -- Floor between rounds, as a second guard for when a pending count leaks
 -- (a killed callback that never runs on_exit, say).
 local last_round = 0
@@ -319,7 +329,9 @@ local function diversify(cands, seed_artist)
             index[k] = g
             if k == seed then seed_group = g else groups[#groups + 1] = g end
         end
-        g.tracks[#g.tracks + 1] = c.title
+        -- The whole candidate, not just its title: a Spotify radio candidate
+        -- carries its URI, and rebuilding it from the title would lose it.
+        g.tracks[#g.tracks + 1] = c
     end
     if seed_group then groups[#groups + 1] = seed_group end
 
@@ -327,9 +339,9 @@ local function diversify(cands, seed_artist)
     while #out < #cands do
         local added = 0
         for _, g in ipairs(groups) do
-            local title = g.tracks[pass]
-            if title then
-                out[#out + 1] = { artist = g.artist, title = title }
+            local c = g.tracks[pass]
+            if c then
+                out[#out + 1] = c
                 added = added + 1
             end
         end
@@ -417,12 +429,7 @@ local function queue_candidates(cands, want)
         if is_seen(c.artist, c.title) then return step() end
         mark_seen(c.artist, c.title)
 
-        -- Double quotes would end the field filter early, so drop them.
-        local function field(v) return (tostring(v):gsub('"', "")) end
-        local query = 'artist:"' .. field(c.artist) .. '" track:"' .. field(c.title) .. '"'
-        run_cli("provider.search", { provider = "spotify", query = query, limit = 1 }, function(ok, r)
-            local t = ok and r and r.tracks and r.tracks[1]
-            if not t or not t.path then return step() end
+        local function enqueue(t)
             run_cli("track.queue", {
                 track = { path = t.path, title = t.title, artist = t.artist, album = t.album },
             }, function(qok)
@@ -436,6 +443,20 @@ local function queue_candidates(cands, want)
                 end
                 step()
             end)
+        end
+
+        -- A Spotify radio candidate already names its track; a Last.fm one
+        -- is only an artist and title, so it has to be found first.
+        if c.path then
+            return enqueue({ path = c.path, title = c.title, artist = c.artist, album = c.album })
+        end
+        -- Double quotes would end the field filter early, so drop them.
+        local function field(v) return (tostring(v):gsub('"', "")) end
+        local query = 'artist:"' .. field(c.artist) .. '" track:"' .. field(c.title) .. '"'
+        run_cli("provider.search", { provider = "spotify", query = query, limit = 1 }, function(ok, r)
+            local t = ok and r and r.tracks and r.tracks[1]
+            if not t or not t.path then return step() end
+            enqueue(t)
         end)
     end
     step()
@@ -447,16 +468,16 @@ end
 -- guarantees busy is reset even if this errors or is cut off by the host's
 -- hookTimeout, so one bad run can't wedge autoplay off for the rest of the
 -- session (busy stuck true forever, silently no-oping every future call).
-local function top_up_body(artist, title)
-    artist = tostring(artist):gsub("^%s+", ""):gsub("%s+$", "")
+-- lastfm_round finds candidates through Last.fm similarity. It is the only
+-- source on a host without Spotify radio, and the fallback on one with it.
+local function lastfm_round(artist, title, want)
+    if API_KEY == "" or key_rejected then
+        cliamp.log.info("autoplay: no usable Last.fm key; nothing to fall back to")
+        return false
+    end
     local short = first_artist(artist)
-    cliamp.log.info("autoplay: seeding from " .. artist .. " - " .. title)
-    -- The seed is playing now; never suggest it back.
-    mark_seen(artist, title)
-
     -- Over-fetch: many suggestions won't resolve on Spotify or were played.
     -- Full artist name first; the cut-down name only if Last.fm had nothing.
-    local want = want_now()
     local cands, answered = similar(artist, title, want * 3)
     if #cands == 0 and answered and short ~= artist then
         cands = similar(short, title, want * 3)
@@ -506,9 +527,64 @@ local function top_up_body(artist, title)
     return true
 end
 
+-- radio_candidates turns a provider.radio reply into queueable candidates,
+-- counting how many have not been played recently.
+local function radio_candidates(r)
+    local cands, fresh = {}, 0
+    for _, t in ipairs((r and r.tracks) or {}) do
+        if t.path and t.title then
+            cands[#cands + 1] = { artist = t.artist or "", title = t.title, path = t.path, album = t.album }
+            if not is_seen(t.artist or "", t.title) then fresh = fresh + 1 end
+        end
+    end
+    return cands, fresh
+end
+
+local function top_up_body(artist, title)
+    artist = tostring(artist):gsub("^%s+", ""):gsub("%s+$", "")
+    cliamp.log.info("autoplay: seeding from " .. artist .. " - " .. title)
+    -- The seed is playing now; never suggest it back.
+    mark_seen(artist, title)
+    local want = want_now()
+
+    -- Spotify's own station first. It is the same list Spotify's app plays
+    -- when a queue runs out, it knows the whole catalogue (Last.fm barely
+    -- covers many regional scenes), and its tracks arrive as URIs, so there
+    -- is nothing to search for. A host without provider.radio (cliamp as it
+    -- ships, or any provider but Spotify) simply fails the call, and the
+    -- round falls through to Last.fm.
+    local uri = current_uri
+    if uri and uri:match("^spotify:track:") and os.time() >= radio_skip_until then
+        run_cli("provider.radio", { provider = "spotify", query = uri, limit = 50 }, function(ok, r)
+            if not ok then radio_skip_until = os.time() + RADIO_RETRY end
+            local cands, fresh = radio_candidates(ok and r)
+            if fresh > 0 then
+                cliamp.log.info("autoplay: spotify radio returned " .. #cands .. " candidates (" .. fresh .. " fresh)")
+                return queue_candidates(diversify(cands, artist), want)
+            end
+            cliamp.log.info("autoplay: no spotify radio (" .. (ok and "nothing fresh" or "unavailable")
+                .. "); trying Last.fm")
+            local rok, started = pcall(lastfm_round, artist, title, want)
+            if not (rok and started) then busy_until = 0 end
+            if not rok then cliamp.log.error("autoplay: Last.fm round failed: " .. tostring(started)) end
+        end)
+        return true
+    end
+    return lastfm_round(artist, title, want)
+end
+
+-- A round is possible with a Last.fm key, or with a Spotify track to ask
+-- Spotify about.
+local function can_round()
+    if current_uri and current_uri:match("^spotify:track:") and os.time() >= radio_skip_until then
+        return true
+    end
+    return API_KEY ~= "" and not key_rejected
+end
+
 local function top_up(artist, title)
     if not enabled or os.time() < busy_until then return end
-    if API_KEY == "" or key_rejected then return end
+    if not can_round() then return end
     if not artist or artist == "" or not title or title == "" then
         cliamp.log.warn("autoplay: no seed track available; skipping")
         return
@@ -608,7 +684,7 @@ end
 -- lookups and queue calls, which is far more than that. Timer callbacks
 -- have no deadline, so every hook below only schedules and returns at once.
 schedule = function(artist, title)
-    if not enabled or os.time() < busy_until or API_KEY == "" then return end
+    if not enabled or os.time() < busy_until or not can_round() then return end
     if not artist or artist == "" then return end
     -- On a player that reports radio sessions (cliamp.player.radio), only top
     -- up those: a loaded playlist already says what plays next. Without that
@@ -629,6 +705,8 @@ schedule = function(artist, title)
 end
 
 p:on("track.change", function(t)
+    local path = t and t.path
+    current_uri = (path and tostring(path):match("^spotify:track:") and tostring(path)) or nil
     if not enabled then return end
     local artist, title = seed_from(t)
     if artist then
@@ -660,7 +738,7 @@ end)
 p:on("app.start", function()
     cliamp.log.info("autoplay: app.start received")
     if API_KEY == "" then
-        cliamp.log.warn("autoplay: no api_key in [plugins.autoplay]; idle")
+        cliamp.log.warn("autoplay: no api_key in [plugins.autoplay]; only Spotify radio can top up the queue")
     end
 end)
 
@@ -672,7 +750,7 @@ end)
 -- work until you fix the key".
 local function lastfm_key_state()
     if API_KEY == "" then
-        return "MISSING, set api_key in [plugins.autoplay]"
+        return "MISSING (Spotify radio still works where the host supports it; set api_key in [plugins.autoplay] for Last.fm)"
     end
     if key_rejected then
         return "REJECTED by last.fm (" .. key_rejected_msg
