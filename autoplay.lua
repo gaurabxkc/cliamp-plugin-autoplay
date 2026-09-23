@@ -31,7 +31,7 @@
 local p = plugin.register({
     name        = "autoplay",
     type        = "hook",
-    version     = "1.5.0",
+    version     = "1.6.0",
     description = "Endless similar-track playback via Last.fm, streamed from Spotify",
     permissions = { "keymap", "exec" },
 })

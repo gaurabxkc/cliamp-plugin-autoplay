@@ -66,9 +66,10 @@ All optional, under `[plugins.autoplay]`:
 
 ## How it works
 
-1. Last.fm `track.getSimilar` for the playing song. If that has nothing new, it falls back to similar artists' top tracks.
-2. Candidates are mixed so one top-up doesn't come from a single artist, and anything played in the last hour is skipped.
-3. Each one is looked up with `cliamp remote call provider.search`, then queued with `track.queue`.
+1. **Spotify's own radio first, where the player offers it.** If the playing track is on Spotify and the player serves `remote call provider.radio`, autoplay asks for the station Spotify itself would play next and queues from that. Those tracks already carry their Spotify IDs, so nothing needs searching. cliamp does not offer `provider.radio` today, so on cliamp this step fails quietly and autoplay moves on to Last.fm. After a failed call it waits ten minutes before asking again.
+2. Otherwise, Last.fm `track.getSimilar` for the playing song. If that has nothing new, it falls back to similar artists' top tracks.
+3. Candidates are mixed so one top-up doesn't come from a single artist, and anything played in the last hour is skipped.
+4. Last.fm candidates are looked up with `cliamp remote call provider.search`, then everything is queued with `track.queue`.
 
 Searching and queueing both happen inside cliamp with its own Spotify login. The plugin never reads your credentials.
 
