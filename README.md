@@ -27,14 +27,14 @@ What one top-up queues for a few different songs:
 cliamp plugins install gaurabxkc/cliamp-plugin-autoplay
 ```
 
-Already have it installed? Remove it first — `plugins install` will not overwrite an existing plugin:
+Already have it installed? Remove it first, because `plugins install` will not overwrite an existing plugin:
 
 ```sh
 cliamp plugins remove autoplay
 cliamp plugins install gaurabxkc/cliamp-plugin-autoplay
 ```
 
-Then add this to cliamp's `config.toml`. It lives beside the `plugins` folder cliamp just printed: `~/.config/cliamp/config.toml` on Linux and macOS, `%APPDATA%\cliamp\config.toml` (for example `C:\Users\you\AppData\Roaming\cliamp\config.toml`) on Windows — **not** `C:\Users\you\.config\cliamp`.
+Then add this to cliamp's `config.toml`. It lives beside the `plugins` folder cliamp just printed: `~/.config/cliamp/config.toml` on Linux and macOS, `%APPDATA%\cliamp\config.toml` (for example `C:\Users\you\AppData\Roaming\cliamp\config.toml`) on Windows, **not** `C:\Users\you\.config\cliamp`.
 
 ```toml
 [plugins]

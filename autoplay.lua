@@ -36,7 +36,7 @@ local p = plugin.register({
     permissions = { "keymap", "exec" },
 })
 
--- p:config(key) returns a single string (or nil) — it is not a table getter.
+-- p:config(key) returns a single string (or nil), it is not a table getter.
 local API_KEY = p:config("api_key") or ""
 local KEEP    = tonumber(p:config("keep") or "5") or 5
 local ADD     = tonumber(p:config("add") or "3") or 3
@@ -47,14 +47,14 @@ local BINARY  = p:config("binary") or "cliamp"
 -- A deadline, not a flag. The host hard-kills an event callback at 5s
 -- (hookTimeout, luaplugin/hooks.go) and that kill can skip the line that
 -- would clear a plain boolean, wedging autoplay off for the rest of the
--- session — which is exactly what "it worked a few times then stopped"
+-- session, which is exactly what "it worked a few times then stopped"
 -- looked like. An expiring stamp self-heals no matter how the kill lands.
 local busy_until = 0
 local BUSY_TTL = 180 -- a round queues tracks one by one, ~10s each
 -- Enqueues already fired but not yet landed. A track.queue call takes ~10s to
 -- come back, while queue.change re-runs the check within a second, so without
 -- counting these the plugin sees a queue that "still needs tracks" and fires
--- again, and again — the runaway that produced 7 rounds of duplicates in 8
+-- again, and again, the runaway that produced 7 rounds of duplicates in 8
 -- seconds. Pending counts as queued for the purposes of deciding to top up.
 local pending = 0
 -- Floor between rounds, as a second guard for when a pending count leaks
@@ -63,7 +63,7 @@ local last_round = 0
 local COOLDOWN = 12
 -- When a round finds nothing new to add, back off hard instead of retrying
 -- every COOLDOWN. A seed yields only ~9 Last.fm candidates, so a deep keep
--- target on a narrow catalogue can be unreachable — without this the plugin
+-- target on a narrow catalogue can be unreachable, without this the plugin
 -- would call Last.fm every 12s forever trying to close a gap it cannot.
 local idle_until = 0
 local IDLE_BACKOFF = 90
@@ -201,7 +201,7 @@ local function lastfm_get(url)
             cliamp.log.error("autoplay: last.fm rejected the API key (" .. msg
                 .. "). Autoplay is idle until api_key in [plugins.autoplay] is fixed;"
                 .. " get a key at https://www.last.fm/api/account/create")
-            cliamp.message("Autoplay: Last.fm rejected the API key — see status", 6)
+            cliamp.message("Autoplay: Last.fm rejected the API key, see status", 6)
             return nil, false
         end
         if code ~= LASTFM_NOT_FOUND then
@@ -294,7 +294,7 @@ end
 -- returns plenty of other good artists.
 --
 -- diversify() regroups a flat candidate list by artist (order preserved
--- within each group) and interleaves — one track per artist per pass — so
+-- within each group) and interleaves, one track per artist per pass, so
 -- the first ADD candidates are ADD different artists whenever that many
 -- distinct artists exist at all. It works on the output of either tier
 -- without either needing to know about grouping, since every candidate
@@ -303,7 +303,7 @@ end
 -- last resort produces) is demoted to last, so it only surfaces once every
 -- other artist has had a turn.
 --
--- This is deliberately NOT "never repeat an artist" — a repeat within a
+-- This is deliberately NOT "never repeat an artist", a repeat within a
 -- batch is a normal radio pick and forcing zero repeats would throw away
 -- good candidates on a seed with few distinct similar artists. The bug
 -- avoided is specifically the whole batch coming from one artist when
@@ -450,7 +450,7 @@ end
 local function top_up_body(artist, title)
     artist = tostring(artist):gsub("^%s+", ""):gsub("%s+$", "")
     local short = first_artist(artist)
-    cliamp.log.info("autoplay: seeding from " .. artist .. " — " .. title)
+    cliamp.log.info("autoplay: seeding from " .. artist .. " - " .. title)
     -- The seed is playing now; never suggest it back.
     mark_seen(artist, title)
 
@@ -465,7 +465,7 @@ local function top_up_body(artist, title)
 
     -- Count how many are actually usable, not just how many came back. A
     -- seed whose whole candidate list was queued earlier is as useless as an
-    -- empty one, and the artist path returns a different, wider pool — so
+    -- empty one, and the artist path returns a different, wider pool, so
     -- fall through to it in both cases rather than adding nothing.
     local function fresh_count(list)
         local n = 0
@@ -494,7 +494,7 @@ local function top_up_body(artist, title)
         return
     end
 
-    -- Round-robin by artist before consuming — see diversify() above. This is
+    -- Round-robin by artist before consuming, see diversify() above. This is
     -- the fix for the "queues the same artist three times" bug.
     cands = diversify(cands, artist)
 
@@ -672,11 +672,11 @@ end)
 -- work until you fix the key".
 local function lastfm_key_state()
     if API_KEY == "" then
-        return "MISSING — set api_key in [plugins.autoplay]"
+        return "MISSING, set api_key in [plugins.autoplay]"
     end
     if key_rejected then
         return "REJECTED by last.fm (" .. key_rejected_msg
-            .. ") — replace api_key in [plugins.autoplay] and restart"
+            .. "), replace api_key in [plugins.autoplay] and restart"
     end
     return "set"
 end
@@ -701,7 +701,7 @@ p:command("status", function()
     local last = store_get("last_seed", nil)
     if last then
         local la, lt = tostring(last):match("^(.-)\t(.*)$")
-        lines[#lines + 1] = "last seed: " .. tostring(la) .. " — " .. tostring(lt)
+        lines[#lines + 1] = "last seed: " .. tostring(la) .. ", " .. tostring(lt)
     end
     return table.concat(lines, "\n")
 end)
